@@ -8,7 +8,7 @@ networks:
 
 services:
   mysql01:
-    image: mysql:5.7
+    image: mysql:lts
     platform: linux/x86_64
     volumes:
       - .:/data
@@ -24,7 +24,7 @@ services:
       - fleet-preview
 
   redis01:
-    image: redis:6
+    image: redis:7
     networks:
       - fleet-preview
 
@@ -45,9 +45,9 @@ services:
       FLEET_SERVER_KEY: /fleet/osquery/fleet.key
       FLEET_LOGGING_JSON: 'true'
       FLEET_OSQUERY_STATUS_LOG_PLUGIN: filesystem
-      FLEET_FILESYSTEM_STATUS_LOG_FILE: /logs/osqueryd.status.log
+      #FLEET_FILESYSTEM_STATUS_LOG_FILE: /logs/osqueryd.status.log
       FLEET_OSQUERY_RESULT_LOG_PLUGIN: filesystem
-      FLEET_FILESYSTEM_RESULT_LOG_FILE: /logs/osqueryd.results.log
+      #FLEET_FILESYSTEM_RESULT_LOG_FILE: /logs/osqueryd.results.log
       FLEET_BETA_SOFTWARE_INVENTORY: 1
       FLEET_LICENSE_KEY: ${FLEET_LICENSE_KEY}
       FLEET_OSQUERY_LABEL_UPDATE_INTERVAL: 1m
@@ -63,7 +63,7 @@ services:
       - redis01
     volumes:
       - .:/fleet/
-      - ./logs:/logs
+    #  - ./logs:/logs
       - ./vulndb:/vulndb
     ports:
       - "8412:8412"
