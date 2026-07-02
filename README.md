@@ -98,11 +98,15 @@ echo "ENROLL_SECRET=$ENROLL_SECRET"   # sanity check — must be non-empty
 
 ```bash
 cd osquery
-docker compose up -d --build          # builds the agent images on first run
+docker compose pull                   # pull the prebuilt images from Docker Hub (bykva/osquery)
+docker compose up -d
 ```
 
-This starts one agent per Ubuntu base plus the **`vuln-agent`** demo host. Within a
-minute the hosts appear in Fleet (**Hosts** page) as `online`.
+This starts an agent for each Ubuntu and Oracle Linux base plus the **`vuln-agent`**
+demo host. Within a minute the hosts appear in Fleet (**Hosts** page) as `online`.
+
+> Want to build the images yourself instead of pulling? See
+> [docs/INFRA.md](docs/INFRA.md#building-the-agent-images-locally).
 
 **4. Run the security audit.** Open **Fleet → Queries → Live query**, target the
 `vuln-agent` host, and work through [**SCENARIOS.md**](SCENARIOS.md) — 10 realistic
