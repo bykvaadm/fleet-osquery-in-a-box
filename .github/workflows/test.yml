@@ -1,12 +1,11 @@
 name: Lab scenario tests
 
 # Brings the whole lab up on the runner and runs the pytest scenario suite
-# (tests/run-lab.sh all = up + test + down). Runs on every branch push and PR.
+# (tests/run-lab.sh all = up + test + down). Runs on every branch push.
 on:
   push:
     branches:
       - "**"
-  pull_request:
   workflow_dispatch:
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref.
