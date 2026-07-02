@@ -105,16 +105,17 @@ The osquery `.rpm` is fetched from:
      -d '{"email":"admin@example.com","password":"Admin123#pass"}' \
      | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')
 
-   curl -s http://localhost:1337/api/latest/fleet/spec/enroll_secret \
-     -H "Authorization: Bearer $TOKEN"
+   export ENROLL_SECRET=$(curl -s http://localhost:1337/api/latest/fleet/spec/enroll_secret \
+     -H "Authorization: Bearer $TOKEN" \
+     | sed -n 's/.*"secret": *"\([^"]*\)".*/\1/p' | head -1)
+   echo "ENROLL_SECRET=$ENROLL_SECRET"   # sanity check — must be non-empty
    ```
 
-3. Start the agents (from `osquery/`, the external `fleet-preview` network is
-   created by the server stack):
+3. Start the agents (from `osquery/`, same terminal so `$ENROLL_SECRET` carries
+   over; the external `fleet-preview` network is created by the server stack):
 
    ```bash
    cd osquery
-   export ENROLL_SECRET=<secret-from-step-2>
    docker compose up -d --build          # builds the images if not present
    ```
 
