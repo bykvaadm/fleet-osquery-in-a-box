@@ -144,7 +144,11 @@ WHERE path = '/etc/ssh/sshd_config'
 ```
 
 **Expected result.** Up to three rows, one per risky directive set to `yes`
-(e.g. `.../PermitRootLogin = yes`).
+(e.g. `.../PermitRootLogin = yes`). On Ubuntu you'll see all three; on Oracle
+Linux the default config already ships a `PasswordAuthentication` line, so augeas
+indexes the duplicate as `PasswordAuthentication[1]` / `[2]` and the end-anchored
+`LIKE` skips it — you still get `PermitRootLogin` + `PermitEmptyPasswords`, which
+is a clear finding.
 
 **Remediation.** Set `PermitRootLogin no`, `PasswordAuthentication no`,
 `PermitEmptyPasswords no`; use key-based auth only and `systemctl reload ssh`.

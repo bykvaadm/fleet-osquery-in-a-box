@@ -22,8 +22,8 @@ osquery-detectable vulnerabilities for classroom demos.
 | Fleet server   | `fleetdm/fleet:v4.87.0`                    | Override with `FLEET_VERSION`. |
 | MySQL          | `mysql:8.4` (LTS)                          | **Do not use MySQL 9.x** — it breaks Fleet's schema migrations (`prepare db`). 8.4 is the newest Fleet-tested line. |
 | Redis          | `redis:7`                                 | |
-| osquery agent  | `5.23.0`                                   | Installed from the official GitHub release `.deb` (amd64 + arm64). |
-| Agent OS bases | Ubuntu `20.04`, `22.04`, `24.04`, `26.04` | Self-built from `agent/Dockerfile`. |
+| osquery agent  | `5.23.0`                                   | Installed from the official GitHub release package (amd64 + arm64). |
+| Agent OS bases | Ubuntu `20.04`/`22.04`/`24.04`/`26.04`, Oracle Linux `8`/`10` | 6 self-built images: Ubuntu via `agent/Dockerfile` (apt/`.deb`), Oracle Linux via `agent/Dockerfile.el` (dnf/`.rpm`). |
 
 ## Architecture
 

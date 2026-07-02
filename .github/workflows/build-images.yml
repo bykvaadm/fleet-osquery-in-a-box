@@ -30,10 +30,19 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     strategy:
-      # Keep building the other bases even if one Ubuntu version fails.
+      # Keep building the other bases even if one fails.
       fail-fast: false
       matrix:
-        ubuntu_version: ["20.04", "22.04", "24.04", "26.04"]
+        # One entry per agent image. Ubuntu uses agent/Dockerfile (apt/.deb);
+        # Oracle Linux uses agent/Dockerfile.el (dnf/.rpm). `base_arg` is the
+        # per-family build-arg; `tag` is the Docker Hub tag suffix.
+        include:
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=20.04",  tag: ubuntu20.04 }
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=22.04",  tag: ubuntu22.04 }
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=24.04",  tag: ubuntu24.04 }
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=26.04",  tag: ubuntu26.04 }
+          - { dockerfile: Dockerfile.el, base_arg: "EL_IMAGE=oraclelinux:8",  tag: ol8 }
+          - { dockerfile: Dockerfile.el, base_arg: "EL_IMAGE=oraclelinux:10", tag: ol10 }
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -51,24 +60,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # The single Docker Hub repo (bykva/osquery) holds every Ubuntu variant as
-      # a distinct tag: a pinned :<osquery>-ubuntu<ver> and a moving :ubuntu<ver>.
+      # The single Docker Hub repo (bykva/osquery) holds every variant as a
+      # distinct tag: a pinned :<osquery>-<tag> and a moving :<tag>.
       - name: Compute tags
         id: tags
         run: |
-          ver="${{ matrix.ubuntu_version }}"
-          echo "pinned=${IMAGE}:${OSQUERY_VERSION}-ubuntu${ver}" >> "$GITHUB_OUTPUT"
-          echo "moving=${IMAGE}:ubuntu${ver}" >> "$GITHUB_OUTPUT"
+          echo "pinned=${IMAGE}:${OSQUERY_VERSION}-${{ matrix.tag }}" >> "$GITHUB_OUTPUT"
+          echo "moving=${IMAGE}:${{ matrix.tag }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: agent
-          file: agent/Dockerfile
+          file: agent/${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            UBUNTU_VERSION=${{ matrix.ubuntu_version }}
+            ${{ matrix.base_arg }}
             OSQUERY_VERSION=${{ env.OSQUERY_VERSION }}
           tags: |
             ${{ steps.tags.outputs.pinned }}

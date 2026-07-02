@@ -12,20 +12,23 @@ lives in the top-level `README.md`.)
 | Fleet server   | `fleetdm/fleet:v4.87.0`                   | Default via `FLEET_VERSION` (`${FLEET_VERSION:-v4.87.0}`). |
 | MySQL          | `mysql:8.4`                              | 8.4 LTS — the newest line Fleet is tested against. **Do NOT use MySQL 9.x**: it breaks Fleet's schema migrations (`prepare db`). |
 | Redis          | `redis:7`                                | |
-| osquery        | `5.23.0`                                | Installed in the agent image from the official GitHub release `.deb` (amd64 + arm64). |
-| Agent OS bases | Ubuntu `20.04`, `22.04`, `24.04`, `26.04` | Built from `agent/Dockerfile`. (centos / ubuntu 14/16/18 were dropped.) |
+| osquery        | `5.23.0`                                | Installed in the agent image from the official GitHub release package (amd64 + arm64). |
+| Agent OS bases | Ubuntu `20.04`/`22.04`/`24.04`/`26.04`, Oracle Linux `8`/`10` | 6 images. Ubuntu → `agent/Dockerfile` (apt/`.deb`); Oracle Linux → `agent/Dockerfile.el` (dnf/`.rpm`). (centos / ubuntu 14/16/18 were dropped.) |
 
 ## Repository layout
 
 ```
 docker-compose.yml            # SERVER stack: mysql01 + redis01 + fleet01 (TLS 8412) + fleet02 (HTTP 1337)
-osquery/docker-compose.yml    # AGENT stack: one service per Ubuntu base + a vuln-agent
+osquery/docker-compose.yml    # AGENT stack: one service per base (Ubuntu x4, Oracle Linux x2) + a vuln-agent
 osquery/fleet.crt / fleet.key # self-signed TLS cert the agents trust (mounted at runtime)
-agent/                        # self-buildable osquery agent image
-  Dockerfile                  #   parameterized by UBUNTU_VERSION / OSQUERY_VERSION / TARGETARCH
+agent/                        # self-buildable osquery agent images
+  Dockerfile                  #   Ubuntu (apt/.deb); parameterized by UBUNTU_VERSION / OSQUERY_VERSION / TARGETARCH
+  Dockerfile.el               #   Oracle Linux / RPM family (dnf/.rpm); parameterized by EL_IMAGE / OSQUERY_VERSION / TARGETARCH
   entrypoint.sh               #   requires ENROLL_SECRET; optional SEED_VULNS hook; exec osqueryd
   osquery.flags               #   TLS config/distributed/logger/carver flags
-.github/workflows/build-images.yml  # CI: build + push multi-arch agent images to GHCR
+  seed-vulnerabilities.sh     #   plants the 10 lab scenarios when SEED_VULNS=true
+.github/workflows/build-images.yml  # CI: test-gated build + push of all 6 images to Docker Hub
+.github/workflows/test.yml          # CI: run the lab scenario suite on MRs (and reused by build-images)
 docs/INFRA.md                 # this file
 ```
 
@@ -58,6 +61,21 @@ docker buildx build \
 
 The osquery `.deb` is fetched from:
 `https://github.com/osquery/osquery/releases/download/5.23.0/osquery_5.23.0-1.linux_<arch>.deb`
+
+### Oracle Linux (RPM family)
+
+Oracle Linux is dnf/RPM-based, so it uses a separate `agent/Dockerfile.el`
+(parameterized by `EL_IMAGE`) that installs the osquery `.rpm`:
+
+```bash
+docker build -f agent/Dockerfile.el --build-arg EL_IMAGE=oraclelinux:8 \
+  -t fleet-osquery-agent:ol8 agent/
+docker build -f agent/Dockerfile.el --build-arg EL_IMAGE=oraclelinux:10 \
+  -t fleet-osquery-agent:ol10 agent/
+```
+
+The osquery `.rpm` is fetched from:
+`https://github.com/osquery/osquery/releases/download/5.23.0/osquery-5.23.0-1.linux.<x86_64|aarch64>.rpm`
 
 ## Bringing the lab up
 
@@ -101,7 +119,8 @@ The osquery `.deb` is fetched from:
    ```
 
    Agent services: `ubuntu2004-agent`, `ubuntu2204-agent`, `ubuntu2404-agent`,
-   `ubuntu2604-agent`, and `vuln-agent` (Ubuntu 24.04 with `SEED_VULNS=true` — the
+   `ubuntu2604-agent`, `oraclelinux8-agent`, `oraclelinux10-agent`, and
+   `vuln-agent` (Ubuntu 24.04 with `SEED_VULNS=true` — the
    deliberately-vulnerable demo host the scenarios target; its seed script is
    authored/mounted separately and run by the entrypoint when present).
 

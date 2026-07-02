@@ -62,6 +62,25 @@ services:
       args:
         UBUNTU_VERSION: "26.04"
 
+  # Oracle Linux agents use the RPM-family Dockerfile (../agent/Dockerfile.el).
+  oraclelinux8-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ol8
+    build:
+      context: ../agent
+      dockerfile: Dockerfile.el
+      args:
+        EL_IMAGE: "oraclelinux:8"
+
+  oraclelinux10-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ol10
+    build:
+      context: ../agent
+      dockerfile: Dockerfile.el
+      args:
+        EL_IMAGE: "oraclelinux:10"
+
   # Deliberately-vulnerable demo host targeted by the lab scenarios. The
   # seed-vulnerabilities.sh script (authored separately) is baked/mounted into
   # the agent image; the entrypoint runs it when SEED_VULNS is truthy.
