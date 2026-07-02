@@ -129,13 +129,33 @@ docker compose pull      # pulls bykva/osquery:5.23.0-ubuntu<ver>
 docker compose up -d --no-build
 ```
 
-## CI (`.github/workflows/build-images.yml`)
+## CI flow
 
-- Triggers: push to `production`, version tags (`v*`), and manual
+Two workflows implement **test-on-MR, publish-on-master**:
+
+```
+ MR (pull_request ─► production)         merge/push ─► production  (or a v* tag)
+ ┌───────────────────────────┐          ┌────────────────────────────────────┐
+ │ test.yml                   │          │ build-images.yml                    │
+ │  scenario-tests            │          │  test  (reuses test.yml) ──┐        │
+ │  = tests/run-lab.sh all    │          │                            ▼        │
+ └───────────────────────────┘          │  build (needs: test) ─► Docker Hub  │
+   no images published                   │   only runs if tests pass           │
+                                         └────────────────────────────────────┘
+```
+
+**`test.yml`** (`.github/workflows/test.yml`)
+- Triggers: `pull_request` (every MR), `workflow_call` (reused by build-images),
   `workflow_dispatch`.
-- Matrix over Ubuntu `20.04 / 22.04 / 24.04 / 26.04`.
-- Uses `docker/setup-qemu-action` + `docker/setup-buildx-action` to build
-  `linux/amd64,linux/arm64` and pushes to **Docker Hub** (`bykva/osquery`).
+- One job: spins the whole lab up on the runner and runs the scenario suite
+  (`tests/run-lab.sh all`). Publishes nothing.
+
+**`build-images.yml`** (`.github/workflows/build-images.yml`)
+- Triggers: push to `production`, version tags (`v*`), manual `workflow_dispatch`.
+- Job `test` reuses `test.yml`; job `build` has `needs: test`, so **images are
+  only published if the lab tests pass**.
+- `build` matrixes Ubuntu `20.04 / 22.04 / 24.04 / 26.04`, builds
+  `linux/amd64,linux/arm64` (QEMU + Buildx) and pushes to **Docker Hub**.
 - Requires two repo secrets (Settings → Secrets and variables → Actions):
   - `DOCKERHUB_USERNAME` — the Docker Hub account (e.g. `bykva`)
   - `DOCKERHUB_TOKEN` — a Docker Hub access token with write scope

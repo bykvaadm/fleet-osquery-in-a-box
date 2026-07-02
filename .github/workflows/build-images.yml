@@ -1,12 +1,8 @@
 name: Build osquery agent images
 
-# Builds the multi-arch osquery agent images and pushes them to Docker Hub
-# (docker.io/bykva/osquery).
-#
-# Triggers:
-#   - push to the `production` release branch
-#   - version tags (e.g. v5.23.0)
-#   - manual run from the Actions tab
+# On merge/push to `production` (or a version tag): run the lab test suite, and
+# ONLY if it passes, build the multi-arch osquery agent images and push them to
+# Docker Hub (docker.io/bykva/osquery).
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   DOCKERHUB_USERNAME  - the Docker Hub account (e.g. bykva)
@@ -25,7 +21,13 @@ env:
   OSQUERY_VERSION: "5.23.0"
 
 jobs:
+  # Gate: run the full lab scenario suite (reused from test.yml). The build job
+  # below only runs if this passes, so a broken production never publishes.
+  test:
+    uses: ./.github/workflows/test.yml
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       # Keep building the other bases even if one Ubuntu version fails.
