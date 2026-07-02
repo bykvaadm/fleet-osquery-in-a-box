@@ -1,0 +1,9 @@
+# Runtime artifacts generated when the lab runs — never commit these.
+logs/*
+!logs/README.md
+vulndb/*
+!vulndb/README.md
+
+# Local env overrides
+*.local
+.env.local

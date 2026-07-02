@@ -1,30 +1,150 @@
-# Try out osquery and Fleet
+# Fleet + osquery in a box — security-audit teaching lab
 
-Check out [`fleetctl preview`](https://fleetdm.com/get-started) for a one-step solution to try out Fleet and osquery.  It uses the configuration files in this repository to run Fleet and the necessary dependencies in Docker.
+A self-contained [**Fleet**](https://fleetdm.com) + [**osquery**](https://osquery.io)
+lab you can run locally with Docker Compose. It brings up a Fleet server (MySQL +
+Redis backing store) and a set of **self-built** Ubuntu osquery agents, including a
+deliberately-**vulnerable demo host** you can hunt across from Fleet.
 
-----------------------
+It started life as the FleetDM `osquery-in-a-box` (the stack behind
+`fleetctl preview`) and has been **modernized**: current component versions,
+self-buildable multi-arch agent images (no more stale Docker Hub pulls), CI to
+publish them to GHCR, and **10 hands-on security-audit scenarios** with real,
+osquery-detectable vulnerabilities for classroom demos.
 
-### Development
+> ⚠️ **The vulnerable agent deliberately weakens itself** (backdoor accounts, SUID
+> root shell, rogue services, SSH/cron persistence, known-vulnerable software, a C2
+> beacon). Run this **only** in an isolated lab — never on a real host or network.
 
-IMPORTANT: 
-* The `master` branch is used by `fleetctl` before version 4.5.0 and should not change anymore except for critical fixes.
-* The main development and testing branch is `develop`.
-* The release branch is `production`.
+## What's inside
 
-To make changes to this repository:
+| Component      | Version                                   | Notes |
+|----------------|-------------------------------------------|-------|
+| Fleet server   | `fleetdm/fleet:v4.87.0`                    | Override with `FLEET_VERSION`. |
+| MySQL          | `mysql:8.4` (LTS)                          | **Do not use MySQL 9.x** — it breaks Fleet's schema migrations (`prepare db`). 8.4 is the newest Fleet-tested line. |
+| Redis          | `redis:7`                                 | |
+| osquery agent  | `5.23.0`                                   | Installed from the official GitHub release `.deb` (amd64 + arm64). |
+| Agent OS bases | Ubuntu `20.04`, `22.04`, `24.04`, `26.04` | Self-built from `agent/Dockerfile`. |
 
-#### Development
+## Architecture
 
-1. Push a PR on a feature/bugfix branch, target branch should be `develop`.
-2. Test `fleetctl preview --preview-config <branch>` with that branch, make sure everything works.
-3. Once well tested and the PR is approved, merge PR to the `develop` branch. 
+```
+                 ┌──────────────────────────────────────────────┐
+  you (browser)  │  docker-compose.yml  (server stack)           │
+  ──────────────▶│                                               │
+  http://:1337   │   fleet02 (HTTP :1337, UI/API)                │
+                 │   fleet01 (TLS  :8412, agent enrollment) ──┐   │
+                 │   mysql01 (8.4)   redis01 (7)              │   │
+                 └───────────────────────────────────────────┼───┘
+                                                              │ TLS enroll
+                 ┌────────────────────────────────────────────┼──┐
+  osquery/       │  osquery/docker-compose.yml  (agent stack)  ▼  │
+  docker-compose │   ubuntu2004 / 2204 / 2404 / 2604 agents        │
+                 │   vuln-agent  (24.04, SEED_VULNS=true) ◀── seed │
+                 └────────────────────────────────────────────────┘
+```
 
-#### QA and Release
+Two Fleet servers share the same MySQL/Redis (upstream design): `fleet01` serves
+TLS on **8412** for osquery agents; `fleet02` serves plain HTTP on **1337** for the
+UI/API.
 
-If there are no changes on the `develop` branch since last release, simply use: `fleetctl preview`.
+## Quick start
 
-If there are changes on the `develop` branch since last release:
-1. Test preview with `fleetctl preview --preview-config develop`.
-2. Once well tested, create a PR to merge `develop` to the `production` branch at which point every `fleetctl preview` (version 4.5+) user will retrieve it.
+**1. Start the server stack** (from the repo root):
 
+```bash
+docker compose up -d
+```
 
+Compose waits for MySQL to be healthy, then starts `fleet01`; `fleet02` waits for
+`fleet01` to finish the DB migration (so the two don't race `prepare db`).
+
+- Fleet UI/API → **http://localhost:1337**
+- Agent enrollment endpoint → **https://localhost:8412** (self-signed cert in `osquery/fleet.crt`)
+
+**2. Create the admin and grab the enroll secret** (headless, via the API):
+
+```bash
+curl -s -X POST http://localhost:1337/api/v1/setup -H 'Content-Type: application/json' -d '{
+  "admin":{"admin":true,"email":"admin@example.com","name":"Admin",
+           "password":"Admin123#pass","password_confirmation":"Admin123#pass"},
+  "org_info":{"org_name":"Demo Lab"},
+  "server_url":"https://localhost:8412"}'
+
+TOKEN=$(curl -s -X POST http://localhost:1337/api/v1/fleet/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"Admin123#pass"}' \
+  | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')
+
+curl -s http://localhost:1337/api/latest/fleet/spec/enroll_secret \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+(Or just log into the UI at http://localhost:1337 and read the enroll secret there.)
+
+**3. Start the agents** (from `osquery/`):
+
+```bash
+cd osquery
+export ENROLL_SECRET=<secret-from-step-2>
+docker compose up -d --build          # builds the agent images on first run
+```
+
+This starts one agent per Ubuntu base plus the **`vuln-agent`** demo host. Within a
+minute the hosts appear in Fleet (**Hosts** page) as `online`.
+
+**4. Run the security audit.** Open **Fleet → Queries → Live query**, target the
+`vuln-agent` host, and work through [**SCENARIOS.md**](SCENARIOS.md) — 10 realistic
+findings, each with the exact osquery SQL to surface it.
+
+**Tear down:**
+
+```bash
+cd osquery && docker compose down
+cd ..      && docker compose down
+```
+
+## The 10 security-audit scenarios
+
+The `vuln-agent` runs [`agent/seed-vulnerabilities.sh`](agent/seed-vulnerabilities.sh)
+at start (because `SEED_VULNS=true`), planting ten distinct issues — each detected by
+a **different osquery table**, so the demo teaches breadth. Full write-ups (framing,
+ATT&CK/CVE, seed commands, detection SQL, expected rows, remediation) are in
+[**SCENARIOS.md**](SCENARIOS.md).
+
+| # | Scenario | ATT&CK | osquery table |
+|---|----------|--------|---------------|
+| 1 | SUID backdoor shell | T1548.001 | `suid_bin` |
+| 2 | Extra UID 0 / passwordless account | T1136.001 | `users`, `shadow` |
+| 3 | Weak SSHD config | T1098 / T1556 | `augeas` |
+| 4 | Rogue SSH `authorized_keys` | T1098.004 | `authorized_keys` |
+| 5 | Cron persistence beacon | T1053.003 | `crontab` |
+| 6 | Rogue bind-shell port | T1571 | `listening_ports` + `processes` |
+| 7 | Process executing from `/tmp` | T1036.005 | `processes` |
+| 8 | NOPASSWD sudoers + weak `/etc/shadow` | T1548.003 / T1222.002 | `sudoers`, `file` |
+| 9 | Known-vulnerable software (CVE) | — | `python_packages` |
+| 10 | Reverse-shell / C2 beacon | T1571 / T1059.004 | `process_open_sockets` |
+
+All queries are validated against the osquery **5.23.0** schema and return rows
+**only when the vulnerability is present** (empty result = clean).
+
+## Building images / CI / GHCR
+
+The agent image is fully self-buildable (`agent/Dockerfile`, parameterized by
+`UBUNTU_VERSION` / `OSQUERY_VERSION` / `TARGETARCH`). A GitHub Actions workflow
+(`.github/workflows/build-images.yml`) builds the matrix of Ubuntu bases as
+multi-arch (`linux/amd64,linux/arm64`) and pushes to
+`ghcr.io/<owner>/fleet-osquery-agent`. Build details, single-image build commands,
+and how to run against pre-built GHCR images are in [**docs/INFRA.md**](docs/INFRA.md).
+
+## Verified
+
+Built and run end-to-end locally: all agent images build; the server stack comes up
+healthy on **MySQL 8.4** + **Fleet v4.87.0**; the `vuln-agent` seeds all 10
+scenarios, enrolls over TLS, shows **online** in Fleet (osquery 5.23.0); and every
+one of the 10 detection queries returns its finding.
+
+## Credits & license
+
+Modernized fork of FleetDM's
+[`fleetdm/osquery-in-a-box`](https://github.com/fleetdm/osquery-in-a-box). Fleet and
+osquery are trademarks of their respective projects. See [LICENSE](LICENSE).
