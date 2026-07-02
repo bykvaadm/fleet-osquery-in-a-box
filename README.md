@@ -143,6 +143,23 @@ ATT&CK/CVE, seed commands, detection SQL, expected rows, remediation) are in
 All queries are validated against the osquery **5.23.0** schema and return rows
 **only when the vulnerability is present** (empty result = clean).
 
+### Load the reports into Fleet automatically
+
+Instead of typing the 10 queries into the UI by hand, run `upload_reports.sh` — it
+creates them all as saved, scheduled queries (named `[audit] NN …`) via the Fleet
+API, so they show up under **Queries** ready to run, with per-query **Reports**
+populating on their schedule:
+
+```bash
+./upload_reports.sh            # create the audit queries; skip any that already exist
+./upload_reports.sh --force    # on name conflict, delete the old query and recreate it
+./upload_reports.sh --wipe     # first delete every hand-created query, then upload ours
+```
+
+Config via env: `FLEET_UI` (default `http://localhost:1337`), `ADMIN_EMAIL`,
+`ADMIN_PASSWORD`, `INTERVAL` (schedule seconds, default `3600`; `0` = on-demand),
+`PLATFORM`. Needs only `python3` (stdlib).
+
 ## Building images / CI / Docker Hub
 
 The agent image is fully self-buildable (`agent/Dockerfile`, parameterized by
