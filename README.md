@@ -8,7 +8,7 @@ deliberately-**vulnerable demo host** you can hunt across from Fleet.
 It started life as the FleetDM `osquery-in-a-box` (the stack behind
 `fleetctl preview`) and has been **modernized**: current component versions,
 self-buildable multi-arch agent images (no more stale Docker Hub pulls), CI to
-publish them to GHCR, and **10 hands-on security-audit scenarios** with real,
+publish them to Docker Hub, and **10 hands-on security-audit scenarios** with real,
 osquery-detectable vulnerabilities for classroom demos.
 
 > ⚠️ **The vulnerable agent deliberately weakens itself** (backdoor accounts, SUID
@@ -127,14 +127,31 @@ ATT&CK/CVE, seed commands, detection SQL, expected rows, remediation) are in
 All queries are validated against the osquery **5.23.0** schema and return rows
 **only when the vulnerability is present** (empty result = clean).
 
-## Building images / CI / GHCR
+## Building images / CI / Docker Hub
 
 The agent image is fully self-buildable (`agent/Dockerfile`, parameterized by
 `UBUNTU_VERSION` / `OSQUERY_VERSION` / `TARGETARCH`). A GitHub Actions workflow
 (`.github/workflows/build-images.yml`) builds the matrix of Ubuntu bases as
-multi-arch (`linux/amd64,linux/arm64`) and pushes to
-`ghcr.io/<owner>/fleet-osquery-agent`. Build details, single-image build commands,
-and how to run against pre-built GHCR images are in [**docs/INFRA.md**](docs/INFRA.md).
+multi-arch (`linux/amd64,linux/arm64`) and pushes them to Docker Hub as
+[`bykva/osquery`](https://hub.docker.com/r/bykva/osquery) (one tag per base, e.g.
+`bykva/osquery:5.23.0-ubuntu24.04`). Build details, single-image build commands,
+the required `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets, and how to run against
+pre-built images are in [**docs/INFRA.md**](docs/INFRA.md).
+
+## Automated tests
+
+`tests/run-lab.sh` brings the whole lab up and runs a pytest suite
+(`tests/test_scenarios.py`) that asserts every one of the 10 scenarios is seeded and
+detectable, plus that the host enrolled/online in Fleet:
+
+```bash
+tests/run-lab.sh          # up + test (leaves the lab running)
+tests/run-lab.sh all      # up + test + tear down
+tests/run-lab.sh down     # tear down
+```
+
+It provisions its own venv (via `uv` or `python3-venv`), so only Docker + Python 3
+are required.
 
 ## Verified
 

@@ -116,7 +116,7 @@ The osquery `.deb` is fetched from:
    cd ..      && docker compose down
    ```
 
-## Running against pre-built (GHCR) images
+## Running against pre-built (Docker Hub) images
 
 `osquery/docker-compose.yml` sets both `build:` and `image:` on every agent
 service, so Compose builds locally when the image is absent but will use/pull a
@@ -125,7 +125,7 @@ published image if present. To pull instead of build:
 ```bash
 cd osquery
 export ENROLL_SECRET=<secret>
-docker compose pull      # pulls ghcr.io/<owner>/fleet-osquery-agent:5.23.0-ubuntu<ver>
+docker compose pull      # pulls bykva/osquery:5.23.0-ubuntu<ver>
 docker compose up -d --no-build
 ```
 
@@ -135,13 +135,27 @@ docker compose up -d --no-build
   `workflow_dispatch`.
 - Matrix over Ubuntu `20.04 / 22.04 / 24.04 / 26.04`.
 - Uses `docker/setup-qemu-action` + `docker/setup-buildx-action` to build
-  `linux/amd64,linux/arm64`, logs in to `ghcr.io` with `GITHUB_TOKEN`
-  (`permissions: packages: write`).
-- Pushes two tags per base:
-  - pinned: `ghcr.io/<owner>/fleet-osquery-agent:5.23.0-ubuntu<ver>`
-  - moving: `ghcr.io/<owner>/fleet-osquery-agent:ubuntu<ver>`
-- The workflow is committed but must be enabled once the repo has the package
-  write permissions configured.
+  `linux/amd64,linux/arm64` and pushes to **Docker Hub** (`bykva/osquery`).
+- Requires two repo secrets (Settings → Secrets and variables → Actions):
+  - `DOCKERHUB_USERNAME` — the Docker Hub account (e.g. `bykva`)
+  - `DOCKERHUB_TOKEN` — a Docker Hub access token with write scope
+- Pushes two tags per base into the single `bykva/osquery` repo:
+  - pinned: `bykva/osquery:5.23.0-ubuntu<ver>`
+  - moving: `bykva/osquery:ubuntu<ver>`
+- Forking to a different account: change `env.IMAGE` in the workflow and the
+  `image:` names in `osquery/docker-compose.yml`.
+
+## Automated scenario tests
+
+`tests/run-lab.sh` orchestrates the whole lab and runs a pytest suite that asserts
+every scenario is seeded and detectable:
+
+- `tests/run-lab.sh up` — start the server stack, create the admin, fetch the
+  enroll secret, build + start the `vuln-agent`, wait for seeding + enrollment.
+- `tests/run-lab.sh test` — provision a venv (via `uv` or `python3-venv`) and run
+  `tests/test_scenarios.py` (12 detection checks + seed-log coverage + Fleet
+  enrollment). Set `AGENTS=all` to also start the four clean Ubuntu agents.
+- `tests/run-lab.sh down` — tear everything down. `all` = up + test + down.
 
 ## What was verified locally
 

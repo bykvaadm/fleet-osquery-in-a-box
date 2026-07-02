@@ -7,3 +7,10 @@ vulndb/*
 # Local env overrides
 *.local
 .env.local
+
+# Test harness artifacts
+tests/.venv/
+tests/.lab-state
+tests/.pytest_cache/
+**/__pycache__/
+*.pyc

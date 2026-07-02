@@ -2,7 +2,7 @@
 #
 # Every service builds the parameterized agent image in ../agent (osquery 5.23.0)
 # for a specific Ubuntu base. An `image:` name is also set so the same file works
-# whether you build locally or pull from ghcr: `docker compose` builds the image
+# whether you build locally or pull from Docker Hub: `docker compose` builds the image
 # if it is not already present locally, otherwise it uses/pulls the named image.
 #
 # Requires the external `fleet-preview` network created by the server stack
@@ -32,7 +32,7 @@ x-agent-common: &agent-common
 services:
   ubuntu2004-agent:
     <<: *agent-common
-    image: ghcr.io/bykvaadm/fleet-osquery-agent:5.23.0-ubuntu20.04
+    image: bykva/osquery:5.23.0-ubuntu20.04
     build:
       context: ../agent
       args:
@@ -40,7 +40,7 @@ services:
 
   ubuntu2204-agent:
     <<: *agent-common
-    image: ghcr.io/bykvaadm/fleet-osquery-agent:5.23.0-ubuntu22.04
+    image: bykva/osquery:5.23.0-ubuntu22.04
     build:
       context: ../agent
       args:
@@ -48,7 +48,7 @@ services:
 
   ubuntu2404-agent:
     <<: *agent-common
-    image: ghcr.io/bykvaadm/fleet-osquery-agent:5.23.0-ubuntu24.04
+    image: bykva/osquery:5.23.0-ubuntu24.04
     build:
       context: ../agent
       args:
@@ -56,7 +56,7 @@ services:
 
   ubuntu2604-agent:
     <<: *agent-common
-    image: ghcr.io/bykvaadm/fleet-osquery-agent:5.23.0-ubuntu26.04
+    image: bykva/osquery:5.23.0-ubuntu26.04
     build:
       context: ../agent
       args:
@@ -67,7 +67,7 @@ services:
   # the agent image; the entrypoint runs it when SEED_VULNS is truthy.
   vuln-agent:
     <<: *agent-common
-    image: ghcr.io/bykvaadm/fleet-osquery-agent:5.23.0-ubuntu24.04
+    image: bykva/osquery:5.23.0-ubuntu24.04
     build:
       context: ../agent
       args:
