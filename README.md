@@ -28,19 +28,25 @@ osquery-detectable vulnerabilities for classroom demos.
 ## Architecture
 
 ```
-                 ┌──────────────────────────────────────────────┐
-  you (browser)  │  docker-compose.yml  (server stack)           │
-  ──────────────▶│                                               │
-  http://:1337   │   fleet02 (HTTP :1337, UI/API)                │
-                 │   fleet01 (TLS  :8412, agent enrollment) ──┐   │
-                 │   mysql01 (8.4)   redis01 (7)              │   │
-                 └───────────────────────────────────────────┼───┘
-                                                              │ TLS enroll
-                 ┌────────────────────────────────────────────┼──┐
-  osquery/       │  osquery/docker-compose.yml  (agent stack)  ▼  │
-  docker-compose │   ubuntu2004 / 2204 / 2404 / 2604 agents        │
-                 │   vuln-agent  (24.04, SEED_VULNS=true) ◀── seed │
-                 └────────────────────────────────────────────────┘
+Browser -> http://localhost:1337  (Fleet UI)
+
+┌──────────────────────────────────────────────┐
+│  SERVER stack        docker-compose.yml      │
+│                                              │
+│  fleet02   HTTP  :1337   UI / API            │
+│  fleet01   TLS   :8412   osquery enrollment  │
+│  mysql01 (8.4)     redis01 (7)               │
+└──────────────────────────────────────────────┘
+                    ^
+                    |  osquery agents enroll over TLS :8412
+                    |
+┌────────────────────────────────────────────────────────────┐
+│  AGENT stack         osquery/docker-compose.yml            │
+│                                                            │
+│  ubuntu       20.04 / 22.04 / 24.04 / 26.04  agents        │
+│  oraclelinux  8 / 10                         agents        │
+│  vuln-agent   (24.04, SEED_VULNS=true)  -> seeds 10 vulns  │
+└────────────────────────────────────────────────────────────┘
 ```
 
 Two Fleet servers share the same MySQL/Redis (upstream design): `fleet01` serves

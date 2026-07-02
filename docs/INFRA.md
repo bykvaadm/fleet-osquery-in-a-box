@@ -2,7 +2,7 @@
 
 This document covers the infrastructure/plumbing of the lab: component versions,
 how to build the agent images, how to bring the stack up, how the CI works, and
-how to run against pre-built images from GHCR. (The end-user "try it out" story
+how to run against pre-built images from Docker Hub. (The end-user "try it out" story
 lives in the top-level `README.md`.)
 
 ## Component versions
@@ -153,14 +153,22 @@ docker compose up -d --no-build
 Two workflows implement **test-on-MR, publish-on-master**:
 
 ```
- MR (pull_request ─► production)         merge/push ─► production  (or a v* tag)
- ┌───────────────────────────┐          ┌────────────────────────────────────┐
- │ test.yml                   │          │ build-images.yml                    │
- │  scenario-tests            │          │  test  (reuses test.yml) ──┐        │
- │  = tests/run-lab.sh all    │          │                            ▼        │
- └───────────────────────────┘          │  build (needs: test) ─► Docker Hub  │
-   no images published                   │   only runs if tests pass           │
-                                         └────────────────────────────────────┘
+MR  (test.yml)
+
+┌────────────────────────────────────────────────┐
+│  on:  pull_request  (every MR)                 │
+│  job: scenario-tests  =  tests/run-lab.sh all  │
+│  result: tests only, nothing is published      │
+└────────────────────────────────────────────────┘
+
+MERGE / PUSH to production  (build-images.yml)
+
+┌───────────────────────────────────────────────────────────────┐
+│  on:  push to production  (or a v* tag)                       │
+│  job: test    -> reuses test.yml (the suite above)            │
+│  job: build   -> needs: test  -> push 6 images to Docker Hub  │
+│  result: images published ONLY if the tests pass              │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 **`test.yml`** (`.github/workflows/test.yml`)
