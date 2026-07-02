@@ -61,14 +61,15 @@ lab_up() {
     log "Starting server stack (mysql01 + redis01 + fleet01 + fleet02)"
     dc_server up -d
 
-    log "Waiting for fleet01 to be healthy (DB migration + serve)"
-    wait_for "fleet01 /healthz" 60 5 \
-        bash -c 'lcurl -sf --max-time 5 -k https://localhost:8412/healthz' \
-        || true
-    # The healthcheck above uses lcurl defined in this shell; fall back to the
-    # container health status which is the authoritative signal.
+    log "Waiting for fleet01 to finish DB migration and become healthy"
     wait_for "fleet01 healthy" 60 5 bash -c \
         'test "$(docker inspect -f "{{.State.Health.Status}}" fleet-preview-server-fleet01-1 2>/dev/null)" = healthy'
+
+    # fleet02 (the UI/API on :1337) starts after fleet01 but needs a few more
+    # seconds to actually serve HTTP. Wait for it before hitting setup/login,
+    # otherwise the first request races the server and curl fails (exit 56).
+    log "Waiting for the Fleet UI/API (fleet02 :1337) to accept requests"
+    wait_for "fleet02 API" 60 3 bash -c "lcurl -sf --max-time 5 '$FLEET_UI/healthz'"
 
     log "Creating admin (idempotent) + fetching enroll secret via ${FLEET_UI}"
     lcurl -s -X POST "$FLEET_UI/api/v1/setup" -H 'Content-Type: application/json' -d "{
@@ -77,11 +78,15 @@ lab_up() {
         \"org_info\":{\"org_name\":\"$ORG_NAME\"},
         \"server_url\":\"$SERVER_URL\"}" >/dev/null || true
 
-    local token secret
-    token="$(lcurl -s -X POST "$FLEET_UI/api/v1/fleet/login" -H 'Content-Type: application/json' \
-        -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
-        | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')"
-    [ -n "$token" ] || die "could not log in to Fleet (bad admin creds?)"
+    local token secret i=0
+    token=""
+    while [ -z "$token" ] && [ "$i" -lt 10 ]; do
+        token="$(lcurl -s -X POST "$FLEET_UI/api/v1/fleet/login" -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
+            | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')"
+        [ -z "$token" ] && { i=$((i+1)); sleep 3; }
+    done
+    [ -n "$token" ] || die "could not log in to Fleet (API not ready / bad admin creds?)"
     secret="$(lcurl -s "$FLEET_UI/api/latest/fleet/spec/enroll_secret" \
         -H "Authorization: Bearer $token" \
         | sed -n 's/.*"secret": *"\([^"]*\)".*/\1/p' | head -1)"
