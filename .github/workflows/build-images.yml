@@ -13,6 +13,12 @@ on:
       - production
     tags:
       - "v*"
+    # Skip doc-only changes — no need to rebuild/republish images.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
 
 # The image repo on Docker Hub. Change this if you fork to a different account.

@@ -9,6 +9,12 @@ name: Lab scenario tests
 #   - workflow_dispatch
 on:
   pull_request:
+    # Skip doc-only changes — nothing to test.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_call:
   workflow_dispatch:
 
