@@ -67,31 +67,37 @@ Compose waits for MySQL to be healthy, then starts `fleet01`; `fleet02` waits fo
 - Fleet UI/API → **http://localhost:1337**
 - Agent enrollment endpoint → **https://localhost:8412** (self-signed cert in `osquery/fleet.crt`)
 
-**2. Create the admin and grab the enroll secret** (headless, via the API):
+**2. Create the admin and capture the enroll secret** (headless, via the API —
+run these in the same terminal so `$ENROLL_SECRET` carries into step 3):
 
 ```bash
+# Create the initial admin (no-op if already set up)
 curl -s -X POST http://localhost:1337/api/v1/setup -H 'Content-Type: application/json' -d '{
   "admin":{"admin":true,"email":"admin@example.com","name":"Admin",
            "password":"Admin123#pass","password_confirmation":"Admin123#pass"},
   "org_info":{"org_name":"Demo Lab"},
-  "server_url":"https://localhost:8412"}'
+  "server_url":"https://localhost:8412"}' >/dev/null
 
+# Log in and capture an API token
 TOKEN=$(curl -s -X POST http://localhost:1337/api/v1/fleet/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"Admin123#pass"}' \
   | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')
 
-curl -s http://localhost:1337/api/latest/fleet/spec/enroll_secret \
-  -H "Authorization: Bearer $TOKEN"
+# Fetch the enroll secret straight into an env var (parsed from the JSON)
+export ENROLL_SECRET=$(curl -s http://localhost:1337/api/latest/fleet/spec/enroll_secret \
+  -H "Authorization: Bearer $TOKEN" \
+  | sed -n 's/.*"secret": *"\([^"]*\)".*/\1/p' | head -1)
+
+echo "ENROLL_SECRET=$ENROLL_SECRET"   # sanity check — must be non-empty
 ```
 
-(Or just log into the UI at http://localhost:1337 and read the enroll secret there.)
+(Or log into the UI at http://localhost:1337 and read the enroll secret there.)
 
-**3. Start the agents** (from `osquery/`):
+**3. Start the agents** (from `osquery/`, same terminal — uses `$ENROLL_SECRET`):
 
 ```bash
 cd osquery
-export ENROLL_SECRET=<secret-from-step-2>
 docker compose up -d --build          # builds the agent images on first run
 ```
 
