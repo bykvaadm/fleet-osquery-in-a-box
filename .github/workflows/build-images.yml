@@ -1,0 +1,85 @@
+name: Build osquery agent images
+
+# On merge/push to `production` (or a version tag): run the lab test suite, and
+# ONLY if it passes, build the multi-arch osquery agent images and push them to
+# Docker Hub (docker.io/bykva/osquery).
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME  - the Docker Hub account (e.g. bykva)
+#   DOCKERHUB_TOKEN     - a Docker Hub access token with write scope
+on:
+  push:
+    branches:
+      - production
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# The image repo on Docker Hub. Change this if you fork to a different account.
+env:
+  IMAGE: docker.io/bykva/osquery
+  OSQUERY_VERSION: "5.23.0"
+
+jobs:
+  # Gate: run the full lab scenario suite (reused from test.yml). The build job
+  # below only runs if this passes, so a broken production never publishes.
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      # Keep building the other bases even if one fails.
+      fail-fast: false
+      matrix:
+        # One entry per agent image. Ubuntu uses agent/Dockerfile (apt/.deb);
+        # Oracle Linux uses agent/Dockerfile.el (dnf/.rpm). `base_arg` is the
+        # per-family build-arg; `tag` is the Docker Hub tag suffix.
+        include:
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=20.04",  tag: ubuntu20.04 }
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=22.04",  tag: ubuntu22.04 }
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=24.04",  tag: ubuntu24.04 }
+          - { dockerfile: Dockerfile,    base_arg: "UBUNTU_VERSION=26.04",  tag: ubuntu26.04 }
+          - { dockerfile: Dockerfile.el, base_arg: "EL_IMAGE=oraclelinux:8",  tag: ol8 }
+          - { dockerfile: Dockerfile.el, base_arg: "EL_IMAGE=oraclelinux:10", tag: ol10 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # QEMU lets us build arm64 alongside amd64 on the amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The single Docker Hub repo (bykva/osquery) holds every variant as a
+      # distinct tag: a pinned :<osquery>-<tag> and a moving :<tag>.
+      - name: Compute tags
+        id: tags
+        run: |
+          echo "pinned=${IMAGE}:${OSQUERY_VERSION}-${{ matrix.tag }}" >> "$GITHUB_OUTPUT"
+          echo "moving=${IMAGE}:${{ matrix.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: agent
+          file: agent/${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            ${{ matrix.base_arg }}
+            OSQUERY_VERSION=${{ env.OSQUERY_VERSION }}
+          tags: |
+            ${{ steps.tags.outputs.pinned }}
+            ${{ steps.tags.outputs.moving }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,127 +1,97 @@
-version: '3.7'
+# Agent stack for the Fleet osquery-in-a-box lab.
+#
+# Every service builds the parameterized agent image in ../agent (osquery 5.23.0)
+# for a specific Ubuntu base. An `image:` name is also set so the same file works
+# whether you build locally or pull from Docker Hub: `docker compose` builds the image
+# if it is not already present locally, otherwise it uses/pulls the named image.
+#
+# Requires the external `fleet-preview` network created by the server stack
+# (../docker-compose.yml) and an ENROLL_SECRET in the environment.
+#
+# (The obsolete top-level `version:` key has been removed — modern Compose.)
 
 networks:
   fleet-preview:
     name: fleet-preview
     external: true
 
+# Shared bits reused by every agent service (YAML anchors).
+x-agent-common: &agent-common
+  volumes:
+    - ./fleet.crt:/etc/osquery/fleet.crt:ro
+  environment:
+    ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
+    FLEET_SERVER: "${FLEET_SERVER:-host.docker.internal:8412}"
+  ulimits:
+    core:
+      hard: 1000000000
+      soft: 1000000000
+  networks:
+    - fleet-preview
+
 services:
-  ubuntu22-osquery:
-    image: "osquery/osquery:5.8.2-ubuntu22.04"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+  ubuntu2004-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ubuntu20.04
+    build:
+      context: ../agent
+      args:
+        UBUNTU_VERSION: "20.04"
 
-  ubuntu20-osquery:
-    image: "osquery/osquery:5.8.2-ubuntu20.04"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+  ubuntu2204-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ubuntu22.04
+    build:
+      context: ../agent
+      args:
+        UBUNTU_VERSION: "22.04"
 
-  ubuntu18-osquery:
-    image: "osquery/osquery:5.8.2-ubuntu18.04"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+  ubuntu2404-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ubuntu24.04
+    build:
+      context: ../agent
+      args:
+        UBUNTU_VERSION: "24.04"
 
-  ubuntu16-osquery:
-    image: "osquery/osquery:5.8.2-ubuntu16.04"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+  ubuntu2604-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ubuntu26.04
+    build:
+      context: ../agent
+      args:
+        UBUNTU_VERSION: "26.04"
 
-  ubuntu14-osquery:
-    image: "osquery/osquery:4.6.0-ubuntu14.04"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+  # Oracle Linux agents use the RPM-family Dockerfile (../agent/Dockerfile.el).
+  oraclelinux8-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ol8
+    build:
+      context: ../agent
+      dockerfile: Dockerfile.el
+      args:
+        EL_IMAGE: "oraclelinux:8"
 
-  centos8-osquery:
-    image: "osquery/osquery:5.8.2-centos8"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+  oraclelinux10-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ol10
+    build:
+      context: ../agent
+      dockerfile: Dockerfile.el
+      args:
+        EL_IMAGE: "oraclelinux:10"
 
-  centos7-osquery:
-    image: "osquery/osquery:5.8.2-centos7"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
+  # Deliberately-vulnerable demo host targeted by the lab scenarios. The
+  # seed-vulnerabilities.sh script (authored separately) is baked/mounted into
+  # the agent image; the entrypoint runs it when SEED_VULNS is truthy.
+  vuln-agent:
+    <<: *agent-common
+    image: bykva/osquery:5.23.0-ubuntu24.04
+    build:
+      context: ../agent
+      args:
+        UBUNTU_VERSION: "24.04"
     environment:
       ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
-
-  centos6-osquery:
-    image: "osquery/osquery:5.8.2-centos6"
-    volumes:
-      - ./fleet.crt:/etc/osquery/fleet.crt
-      - ./example_osquery.flags:/etc/osquery/osquery.flags
-    environment:
-      ENROLL_SECRET: "${ENROLL_SECRET:?ENROLL_SECRET must be set for server authentication}"
-    command: osqueryd --flagfile=/etc/osquery/osquery.flags --tls_hostname=${FLEET_SERVER-host.docker.internal:8412}
-    ulimits:
-      core:
-        hard:  1000000000
-        soft:  1000000000
-    networks:
-      - fleet-preview
+      FLEET_SERVER: "${FLEET_SERVER:-host.docker.internal:8412}"
+      SEED_VULNS: "true"

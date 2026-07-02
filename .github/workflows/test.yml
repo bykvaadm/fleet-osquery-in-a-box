@@ -1,0 +1,43 @@
+name: Lab scenario tests
+
+# Brings the whole lab up on the runner and runs the pytest scenario suite
+# (tests/run-lab.sh all = up + test + down).
+#
+# Runs on:
+#   - pull_request  -> every MR gets tested before merge
+#   - workflow_call -> reused as a gating job by build-images.yml on production
+#   - workflow_dispatch
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+# Cancel an in-progress run when a newer commit is pushed to the same ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scenario-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # GitHub-hosted ubuntu runners already ship Docker + the `docker compose`
+      # v2 plugin, so no extra Docker setup is needed.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Bring up the lab and run the scenario suite
+        run: bash tests/run-lab.sh all
+
+      - name: Dump lab logs on failure
+        if: failure()
+        run: |
+          echo "::group::fleet01"; docker logs fleet-preview-server-fleet01-1 2>&1 | tail -100 || true; echo "::endgroup::"
+          echo "::group::vuln-agent"; docker logs "$(docker ps -a --filter name=vuln-agent --format '{{.Names}}' | head -1)" 2>&1 | tail -100 || true; echo "::endgroup::"
+          docker ps -a || true

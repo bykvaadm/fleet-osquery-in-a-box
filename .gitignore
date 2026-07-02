@@ -1,0 +1,16 @@
+# Runtime artifacts generated when the lab runs — never commit these.
+logs/*
+!logs/README.md
+vulndb/*
+!vulndb/README.md
+
+# Local env overrides
+*.local
+.env.local
+
+# Test harness artifacts
+tests/.venv/
+tests/.lab-state
+tests/.pytest_cache/
+**/__pycache__/
+*.pyc

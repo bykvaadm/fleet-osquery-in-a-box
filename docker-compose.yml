@@ -8,7 +8,10 @@ networks:
 
 services:
   mysql01:
-    image: mysql:8
+    # MySQL 8.4 (LTS) is the newest release Fleet is tested against. Do NOT bump
+    # to MySQL 9.x: it changes auth/SQL-mode defaults that break Fleet's schema
+    # migrations ("prepare db"). 8.4 is the supported, Fleet-tested line.
+    image: mysql:8.4
     platform: linux/x86_64
     volumes:
       - .:/data
@@ -20,6 +23,12 @@ services:
       MYSQL_PASSWORD: fleet
     ports:
       - "3308:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-ptoor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     networks:
       - fleet-preview
 
@@ -31,7 +40,7 @@ services:
   # Normal Fleet server running TLS with a self-signed cert to handle the
   # osquery connections.
   fleet01:
-    image: fleetdm/fleet:${FLEET_VERSION:-latest}
+    image: fleetdm/fleet:${FLEET_VERSION:-v4.87.0}
     platform: linux/x86_64
     command: sh -c "/usr/bin/fleet prepare db --no-prompt && /usr/bin/fleet serve"
     environment:
@@ -59,8 +68,21 @@ services:
       # typical default of provided.
       FLEET_OSQUERY_HOST_IDENTIFIER: ${FLEET_OSQUERY_HOST_IDENTIFIER:-provided}
     depends_on:
-      - mysql01
-      - redis01
+      mysql01:
+        condition: service_healthy
+      redis01:
+        condition: service_started
+    # Expose readiness so fleet02 can wait for migrations to finish (fleet01 runs
+    # `prepare db`); without this the two servers race the migration and one
+    # crashes with "Table 'migration_status_tables' already exists".
+    healthcheck:
+      # Clear any inherited *_proxy so the localhost check never gets routed
+      # through an HTTP proxy (busybox wget ignores no_proxy for localhost).
+      test: ["CMD-SHELL", "http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= wget --no-check-certificate -qO- https://localhost:8412/healthz >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
     volumes:
       - .:/fleet/
     #  - ./logs:/logs
@@ -83,7 +105,7 @@ services:
   # This is expected to receive UI requests only and not connections from
   # agents.
   fleet02:
-    image: fleetdm/fleet:${FLEET_VERSION:-latest}
+    image: fleetdm/fleet:${FLEET_VERSION:-v4.87.0}
     platform: linux/x86_64
     command: sh -c "/usr/bin/fleet prepare db --no-prompt && /usr/bin/fleet serve"
     environment:
@@ -106,8 +128,14 @@ services:
       # typical default of provided.
       FLEET_OSQUERY_HOST_IDENTIFIER: ${FLEET_OSQUERY_HOST_IDENTIFIER:-provided}
     depends_on:
-      - mysql01
-      - redis01
+      mysql01:
+        condition: service_healthy
+      redis01:
+        condition: service_started
+      # Wait for fleet01 to finish DB migrations before this second server runs
+      # its own `prepare db` (now a no-op) — prevents the migration race.
+      fleet01:
+        condition: service_healthy
     ports:
       - "1337:1337"
     networks:
