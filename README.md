@@ -119,11 +119,11 @@ cd osquery && docker compose down
 cd ..      && docker compose down
 ```
 
-## The 10 security-audit scenarios
+## The 15 security-audit scenarios
 
 The `vuln-agent` runs [`agent/seed-vulnerabilities.sh`](agent/seed-vulnerabilities.sh)
-at start (because `SEED_VULNS=true`), planting ten distinct issues — each detected by
-a **different osquery table**, so the demo teaches breadth. Full write-ups (framing,
+at start (because `SEED_VULNS=true`), planting fifteen distinct issues — each detected
+by a **different osquery table**, so the demo teaches breadth. Full write-ups (framing,
 ATT&CK/CVE, seed commands, detection SQL, expected rows, remediation) are in
 [**SCENARIOS.md**](SCENARIOS.md).
 
@@ -139,13 +139,32 @@ ATT&CK/CVE, seed commands, detection SQL, expected rows, remediation) are in
 | 8 | NOPASSWD sudoers + weak `/etc/shadow` | T1548.003 / T1222.002 | `sudoers`, `file` |
 | 9 | Known-vulnerable software (CVE) | — | `python_packages` |
 | 10 | Reverse-shell / C2 beacon | T1571 / T1059.004 | `process_open_sockets` |
+| 11 | LD_PRELOAD userland rootkit | T1574.006 | `process_envs` |
+| 12 | Attacker traces in shell history | T1552.003 / T1070.003 | `shell_history` |
+| 13 | Fileless: deleted binary still running | T1070.004 | `processes` (`(deleted)`) |
+| 14 | `/etc/hosts` hijack of trusted domains | T1565.001 / T1556 | `etc_hosts` |
+| 15 | Hidden privilege via the `docker` group | T1098 / T1548 | `user_groups` + `groups` |
 
 All queries are validated against the osquery **5.23.0** schema and return rows
 **only when the vulnerability is present** (empty result = clean).
 
+### Challenge (CTF) mode, scoring & compliance policies
+
+- **[`CHALLENGES.md`](CHALLENGES.md)** — the same 15 findings as a hunt: you get
+  the story and the ATT&CK technique but **not** the table or SQL. Pick the table
+  and write the query yourself; `SCENARIOS.md` is the answer key.
+- **`./grade.sh`** — a scorecard run directly against the seeded host:
+  `./grade.sh` (audit: 15/15 findings detectable) or `./grade.sh --remediation`
+  (fix the host, re-run, aim for 15/15 **CLEAN**).
+- **`./upload_reports.sh --policies`** — also loads the checks as Fleet
+  **Policies** (inverted so *pass = clean*): the **Policies** page then shows the
+  `vuln-agent` failing while the clean agents pass — a live compliance dashboard.
+- **Fleet-wide hunt:** run any detection with *no host filter* — only the
+  `vuln-agent` lights up among the clean agents, exactly like sweeping a real fleet.
+
 ### Load the reports into Fleet automatically
 
-Instead of typing the 10 queries into the UI by hand, run `upload_reports.sh` — it
+Instead of typing the 15 queries into the UI by hand, run `upload_reports.sh` — it
 creates them all as saved, scheduled queries (named `[audit] NN …`) via the Fleet
 API, so they show up under **Queries** ready to run, with per-query **Reports**
 populating on their schedule:
@@ -154,6 +173,7 @@ populating on their schedule:
 ./upload_reports.sh            # create the audit queries; skip any that already exist
 ./upload_reports.sh --force    # on name conflict, delete the old query and recreate it
 ./upload_reports.sh --wipe     # first delete every hand-created query, then upload ours
+./upload_reports.sh --policies # also create Fleet Policies (compliance dashboard)
 ```
 
 Config via env: `FLEET_UI` (default `http://localhost:1337`), `ADMIN_EMAIL`,

