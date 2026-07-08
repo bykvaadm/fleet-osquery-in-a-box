@@ -109,9 +109,56 @@ SCENARIOS = [
         "WHERE pos.state = 'ESTABLISHED' AND pos.remote_port = 9001;",
         lambda r: len(r) >= 1,
     ),
+    (
+        "11-ld-preload",
+        "LD_PRELOAD library injection (process_envs)",
+        "SELECT pe.pid, p.name, pe.key, pe.value "
+        "FROM process_envs pe JOIN processes p ON pe.pid = p.pid "
+        "WHERE pe.key IN ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT') "
+        "AND pe.value != '';",
+        lambda r: any(row.get("key") == "LD_PRELOAD" for row in r),
+    ),
+    (
+        "12-shell-history",
+        "Attacker traces in shell history (shell_history)",
+        "SELECT u.username, sh.command FROM shell_history sh "
+        "JOIN users u ON sh.uid = u.uid "
+        "WHERE sh.command LIKE '%curl%| bash%' OR sh.command LIKE '%wget %' "
+        "OR sh.command LIKE '%base64 -d%' OR sh.command LIKE '%history -c%' "
+        "OR sh.command LIKE '%/dev/tcp/%';",
+        lambda r: any("history -c" in row.get("command", "")
+                      or "base64 -d" in row.get("command", "") for row in r),
+    ),
+    (
+        "13-fileless-deleted",
+        "Fileless / deleted-binary process (processes.on_disk)",
+        "SELECT pid, name, path, cmdline, uid FROM processes "
+        "WHERE on_disk = 0 AND path != '';",
+        lambda r: any("x11-unix-cache" in row.get("path", "") for row in r),
+    ),
+    (
+        "14-hosts-hijack",
+        "/etc/hosts hijack of update domains (etc_hosts)",
+        "SELECT address, hostnames FROM etc_hosts "
+        "WHERE address NOT LIKE '127.%' AND address NOT LIKE '::%' "
+        "AND address NOT LIKE 'fe00%' AND address NOT LIKE 'ff0%' "
+        "AND (hostnames LIKE '%.com%' OR hostnames LIKE '%.org%' "
+        "OR hostnames LIKE '%.net%');",
+        lambda r: any(row.get("address") == "45.137.21.53" for row in r),
+    ),
+    (
+        "15-docker-group",
+        "Backdoor user in a privileged group (user_groups)",
+        "SELECT u.username, u.uid, g.groupname FROM user_groups ug "
+        "JOIN users u ON ug.uid = u.uid JOIN groups g ON ug.gid = g.gid "
+        "WHERE g.groupname IN ('docker', 'lxd', 'disk', 'shadow') "
+        "AND u.username != 'root';",
+        lambda r: any(row.get("username") == "svcagent"
+                      and row.get("groupname") == "docker" for row in r),
+    ),
 ]
 
-SEED_LOG_MARKERS = [f"scenario {n}:" for n in range(1, 11)]
+SEED_LOG_MARKERS = [f"scenario {n}:" for n in range(1, 16)]
 
 
 @pytest.mark.parametrize(
